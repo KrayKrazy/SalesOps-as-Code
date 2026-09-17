@@ -30,3 +30,13 @@ Aqui estão os resultados consolidados de 15 perfis de clientes gerenciados pela
 
 ## Argumento de Vendas (Quebra de Objeção: "Funciona pro meu negócio?")
 "Temos uma taxa média de conversão validada de mais de 14% em 15 perfis diferentes, gerando mais de 2.300 interações reais (pessoas batendo na porta e ligando) em 90 dias, em nichos que vão de cafés a chaveiros e borracharias. O Google é o fundo de funil perfeito: o cliente já tem o problema, ele só precisa achar VOCÊ no mapa antes do seu concorrente."
+
+## Dados de Tráfego Orgânico (Google Search Console)
+Com a nova extração realizada hoje, identificamos o potencial latente de tráfego orgânico (SEO) além do Google Maps.
+
+**Destaques de Busca Orgânica:**
+- **Reis Borracharia 24h:** 1.184 impressões (Top Query: 'borracharia 24 horas mais próxima', Posição 2.1)
+- **Chaveiro Sudoeste:** 454 impressões (Top Query: 'chaveiro brasilia', Posição 2.4)
+- **BSB Telas (Redes de Proteção):** 241 impressões (Top Query: 'rede de proteção', Posição 6.5)
+
+Esses números comprovam que o Protocolo Presença Blindada não apenas domina o Maps (onde gera rotas e ligações instantâneas), mas também alavanca a busca na web tradicional, garantindo que a empresa apareça quando o cliente pesquisa no navegador padrão do celular.
