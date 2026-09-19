@@ -1,8 +1,8 @@
-# PROJETO EXECUTIVO: ARQUITETURA DE SISTEMAS SDR (NÍVEL STAFF ENGINEER)
+# PROJETO EXECUTIVO: ARQUITETURA DE SISTEMAS SDR (NÍVEL STAFF ENGINEER) - V2 (AWESOME DIFY UPDATE)
 **Status:** Blueprint de Implementação
-**Escopo:** Mapeamento paramétrico e exato de cada nó no n8n e cada bloco no Dify. Nenhuma variável foi deixada ao acaso.
+**Escopo:** Mapeamento paramétrico e exato de cada nó no n8n e cada bloco no Dify. Integra as arquiteturas avançadas do Awesome Dify (Deep Researcher, MCP, Text2SQL).
 
-Este documento transcende o nível conceitual. É a planta baixa para a construção do ecossistema mais resiliente possível na atual stack de mercado.
+Este documento transcende o nível conceitual. É a planta baixa para a construção do ecossistema mais resiliente e avançado possível na atual stack de mercado.
 
 ---
 
@@ -99,7 +99,7 @@ Para blindar o sistema, a execução monolítica (V4 atual) deve ser dividida em
    - Cria o lead se não existir, atualiza a data de `last_interaction_at = NOW()`. Puxa o `dify_conversation_id`.
 4. **Node: HTTP Request (Dify Chatflow)**
    - URL: `http://dify.kelevra.shop/v1/chat-messages`
-   - **CONFIGURAÇÃO CRÍTICA (Fim do SSE):** Ao usar um Dify Chatflow, você **pode e deve** enviar `"response_mode": "blocking"`. Isso faz com que a API retorne um JSON simples com a resposta pronta. **Isso elimina completamente a necessidade do código complexo de Parseamento de Streaming do V4 antigo!**
+   - **CONFIGURAÇÃO CRÍTICA (Fim do SSE):** Ao usar um Dify Chatflow, você **pode e deve** enviar `"response_mode": "blocking"`. Isso elimina completamente a necessidade do código complexo de Parseamento de Streaming do V4 antigo!
    - Send Body:
      ```json
      {
@@ -121,69 +121,74 @@ Para blindar o sistema, a execução monolítica (V4 atual) deve ser dividida em
 ---
 
 ## PARTE 2: DIFY - ARQUITETURA DO GRAFO NEURAL (CHATFLOW)
-Esqueça o "Prompt Mágico" único. Crie um aplicativo do tipo **Chatflow (Workflow)** no Dify. Isso divide o "cérebro" em áreas especializadas (Lóbulos lógicos).
+Dividindo o "cérebro" em áreas especializadas baseadas nos Padrões do Awesome Dify.
 
 ### Bloco 1: Start Node
-- Configurado com as variáveis de entrada exigidas: `sys.query` (a mensagem do usuário) e `lead_phone` (variável customizada).
+- Configurado com as variáveis de entrada: `sys.query` (a mensagem do usuário) e `lead_phone`.
 
 ### Bloco 2: Question Classifier (LLM Node)
 **A jogada de Mestre:** Este nó **não responde ao usuário**. Ele apenas lê a mensagem e escolhe um caminho.
 - **Modelo:** `gpt-4o-mini` (rápido e barato).
-- **Prompt:**
-  ```text
-  Analise a mensagem do usuário e categorize-a estritamente em UMA destas intenções:
-  1. GREETING: O usuário apenas disse Oi, Olá, Tudo bem.
-  2. BANT_REPLY: O usuário falou de orçamento, dor, tempo ou respondeu uma pergunta de qualificação.
-  3. OBJECTION_OR_QUESTION: O usuário fez uma pergunta técnica sobre a Kelevra ou reclamou de preço/tempo.
-  4. HANDOFF_REQUEST: O usuário está irritado ou pediu expressamente para falar com um atendente humano.
-  ```
-- **Classes de Saída:** `GREETING`, `BANT_REPLY`, `OBJECTION_OR_QUESTION`, `HANDOFF_REQUEST`.
+- **Classes de Saída:** `GREETING`, `BANT_REPLY`, `COMPANY_MENTIONED` (Nova intenção mapeada), `OBJECTION_OR_QUESTION`, `HANDOFF_REQUEST`.
 
 ### Bloco 3: Roteador Lógico (IF / ELSE Node)
-Conecta o *Question Classifier* a 4 caminhos diferentes baseados na classe de saída.
 
 #### Caminho 3.1: Se = `HANDOFF_REQUEST`
-- Conecta a um **Answer Node** (Texto Estático).
-- Valor: `[HANDOFF] Claro, vou pedir para a Gabriela do nosso time assumir o atendimento por aqui para te dar um suporte melhor.`
-- *Fim do Fluxo.*
+- Conecta a um **Answer Node**: `[HANDOFF] Claro, vou pedir para a Gabriela assumir aqui.` -> *Fim do Fluxo.*
 
 #### Caminho 3.2: Se = `OBJECTION_OR_QUESTION`
-- Conecta a um **Knowledge Retrieval Node (RAG)**.
-- Base selecionada: `FAQ e Contorno de Objeções Kelevra` (O arquivo que subimos pro Git).
-- O RAG extrai a resposta certa.
-- Conecta a um **LLM Node Especialista em Objeção**:
-  - Prompt: `Usando o contexto fornecido pelo RAG, responda a dúvida do cliente em no MÁXIMO 3 linhas. Use tom humanizado e finalize devolvendo a pergunta para a marcação da call de 5 minutos.`
+- Conecta a um **Knowledge Retrieval Node (RAG)** -> Extrai FAQ Kelevra do Git -> **LLM Node Especialista em Objeção**.
 
-#### Caminho 3.3: Se = `GREETING` ou `BANT_REPLY`
+#### Caminho 3.3: Se = `COMPANY_MENTIONED` (Integração Deep Researcher)
+**Esta é a mágica extraída do Awesome Dify.** Se o usuário mencionar o nome da empresa dele ("Sou da Padaria Pão Quente", "Tenho uma Clínica Sorriso"):
+1. **Node: Iteration / Tool (DuckDuckGo Search):** Pesquisa o nome da empresa no DuckDuckGo.
+2. **Node: Web Scraper (Jina Reader / Firecrawl):** Lê os 2 primeiros resultados e extrai o texto do site do lead.
+3. **Node: LLM (Synthesizer):** Resume a estrutura da empresa do lead em uma variável `company_dossier`.
+4. Envia o `company_dossier` para o **LLM Node Especialista em BANT** (Caminho 3.4).
+
+#### Caminho 3.4: Se = `GREETING` ou `BANT_REPLY` (Chega direto, ou vindo do 3.3)
 - Conecta ao **LLM Node Especialista em BANT (O Core SDR)**.
 - Prompt:
   ```text
   Você é Solano, SDR Hunter da Kelevra.
+  Contexto da Empresa do Lead (se houver): {{company_dossier}}
+  
   Regra 1: Siga sua tabela BANT para qualificar leads sobre o "Protocolo Presença Blindada".
-  Regra 2: Nunca use bullet points. Mande 2 a 3 linhas curtas, linguajar solto de WhatsApp ("Opa", "Cara").
-  Regra 3: Se o lead já confirmou interesse, ou validou a Dor/Budget, responda convidando para a call e termine a resposta EXATAMENTE com a tag: [REUNIAO_MARCADA]
+  Regra 2: Se tiver o contexto da empresa dele, faça "Cold Reading". Diga que analisou a presença digital deles e use isso como gancho para a dor.
+  Regra 3: Nunca use bullet points. Mande 2 a 3 linhas curtas, linguajar solto de WhatsApp.
+  Regra 4: Se o lead já validou a Dor/Budget, termine EXATAMENTE com: [REUNIAO_MARCADA]
   ```
 
 ### Bloco 4: O Output Guardrail (Code Node)
-Todos os LLMs das rotas desembocam neste nó.
-- **Ambiente:** JavaScript/Python interno do Dify.
-- **Script:**
+- **Script (Filtro anti-alucinação):**
   ```javascript
   function main(args) {
       let text = args.text;
-      // Remove qualquer tentativa do LLM de fazer listas (bullet points) alucinadas
-      text = text.replace(/^-\s/gm, '');
-      text = text.replace(/^\d+\.\s/gm, '');
+      text = text.replace(/^-\s/gm, ''); // Remove bullet points
       return { final_response: text.trim() };
   }
   ```
 
 ### Bloco 5: End Node
-- Devolve a variável `final_response` como saída bloqueante (Blocking API Return) de volta para o n8n.
+- Devolve a variável `final_response` como saída bloqueante (Blocking API) para o n8n.
 
 ---
 
-## 🔒 3. Considerações de Nível Arquitetural
-1. **Idempotência do Webhook:** Com a Tabela de Fila (`webhook_queue`), se a Evolution tentar enviar o mesmo webhook duas vezes (por um glitch de rede), a tabela pode usar a constraint `UNIQUE(message_id)` no banco de dados para rejeitar automaticamente, garantindo que o cliente jamais receba mensagens duplicadas.
-2. **Latência Invisível:** O *Debounce* de 5 segundos adiciona um *delay* de 5 segundos na resposta. Para um humano no WhatsApp, responder entre 5 a 15 segundos é a janela perfeita de simulação de "Tempo de digitação".
-3. **Migração Indolor:** Esse ecossistema pode ser construído paralelamente no n8n. Você mantém seu V4 atual rodando enquanto construímos o *MS-01, MS-02 e MS-03*. Quando estiverem perfeitos, basta desligar o V4 e ligar os novos.
+## PARTE 3: INTEGRAÇÕES AVANÇADAS (Awesome Dify Ecosystem)
+Além do Workflow Inbound SDR, construíremos mais 2 Agentes/Fluxos paralelos na sua workspace do Dify baseados nos padrões raspados:
+
+### 1. O "Assistente do Solano" (Text2SQL)
+- **Objetivo:** Você mandar áudio no seu WhatsApp pessoal e a IA ler seu banco de dados.
+- **Workflow:** `Start` -> `LLM (Gera SQL)` -> `HTTP Request Node (Bate na API do seu banco via PostgREST/Supabase)` -> `LLM (Traduz o JSON para Humano)`.
+- **Exemplo de uso:** *"Quantas vendas de E-commerce caíram no Medusa hoje?"* -> Ele transforma em SQL, cruza as tabelas e te manda a resposta no WhatsApp.
+
+### 2. O "Agente MCP" (Integração Direta Cakto/Medusa)
+- **Objetivo:** O Dify manipular ferramentas complexas de código sem precisar passar pelo n8n.
+- **Workflow:** Usando a integração MCP (Model Context Protocol) que consta no Vault `dify-mcp-sse+Zapier MCP`, podemos conectar um servidor MCP em NodeJS direto no Dify. Isso permite que o Dify cancele boletos no Cakto, estorne compras ou adicione cupons no MedusaJS usando apenas processamento nativo.
+
+---
+
+## 🔒 Considerações de Nível Arquitetural
+1. **Idempotência do Webhook:** Com a Tabela de Fila, se a Evolution enviar o mesmo webhook duas vezes, o Supabase rejeita via `UNIQUE(message_id)`.
+2. **Personalização Absoluta:** O uso do Deep Researcher no fluxo SDR aumenta a conversão brutalmente porque o Agente prova que "conhece" a empresa do cara antes de tentar vender.
+3. **Migração Indolor:** Esse ecossistema pode ser construído paralelamente no n8n. Você mantém seu V4 atual rodando enquanto construímos as Fases MS-01, MS-02 e MS-03. Quando estiverem perfeitos, basta desligar o V4.
