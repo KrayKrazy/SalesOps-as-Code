@@ -1,0 +1,129 @@
+{
+  "name": "MS-03-Engine (SDR Kelevra)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-ms03",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [ 200, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify.kelevra.shop/v1/chat-messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer app-spFBhC6pWmkjenZ4buAOJuWS"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "inputs",
+              "value": "={{ {\n  \"lead_phone\": $json.remote_jid\n} }}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.data.texts.join(' | ') }}"
+            },
+            {
+              "name": "response_mode",
+              "value": "blocking"
+            },
+            {
+              "name": "user",
+              "value": "={{ $json.remote_jid }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dify-request",
+      "name": "Dify Chatflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [ 460, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.vps10393.panel.icontainer.run/message/sendText/{{ $json.data.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "429683C4C977415CAAFCCE10F7D57E11"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('Execute Workflow Trigger').item.json.remote_jid.split('@')[0] }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.answer }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "evo-send",
+      "name": "Evolution Resposta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [ 720, 300 ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dify Chatflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dify Chatflow": {
+      "main": [
+        [
+          {
+            "node": "Evolution Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "f7a3bc92-0451-4e4c-9dd7-7ab823cb2d2e",
+  "triggerCount": 0,
+  "tags": []
+}
