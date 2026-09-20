@@ -1,0 +1,315 @@
+﻿app:
+  description: 'Agente SDR Principal Kelevra com Classificador de Intenção e Filtro de Listas'
+  icon: '🤖'
+  icon_background: '#FFEAD5'
+  mode: advanced-chat
+  name: Kelevra SDR Chatflow
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - id: edge-start-classifier
+      source: start-node
+      sourceHandle: source
+      target: classifier-node
+      targetHandle: target
+      type: custom
+    - id: edge-class-bant
+      source: classifier-node
+      sourceHandle: class1
+      target: llm-bant-node
+      targetHandle: target
+      type: custom
+    - id: edge-class-company
+      source: classifier-node
+      sourceHandle: class2
+      target: tool-search-node
+      targetHandle: target
+      type: custom
+    - id: edge-class-objection
+      source: classifier-node
+      sourceHandle: class3
+      target: llm-objection-node
+      targetHandle: target
+      type: custom
+    - id: edge-class-handoff
+      source: classifier-node
+      sourceHandle: class4
+      target: answer-handoff-node
+      targetHandle: target
+      type: custom
+    - id: edge-tool-bant
+      source: tool-search-node
+      sourceHandle: source
+      target: llm-bant-node
+      targetHandle: target
+      type: custom
+    - id: edge-bant-code
+      source: llm-bant-node
+      sourceHandle: source
+      target: code-node
+      targetHandle: target
+      type: custom
+    - id: edge-obj-code
+      source: llm-objection-node
+      sourceHandle: source
+      target: code-node
+      targetHandle: target
+      type: custom
+    - id: edge-code-end
+      source: code-node
+      sourceHandle: source
+      target: end-node
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: Start
+        type: start
+        variables:
+        - label: lead_phone
+          max_length: 48
+          options: []
+          required: true
+          type: text-input
+          variable: lead_phone
+      height: 90
+      id: start-node
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        classes:
+        - id: class1
+          name: GREETING_OR_BANT
+        - id: class2
+          name: COMPANY_MENTION
+        - id: class3
+          name: OBJECTION
+        - id: class4
+          name: HANDOFF
+        desc: Classifica a mensagem
+        instruction: ''
+        model:
+          completion_params:
+            temperature: 0
+          mode: chat
+          name: gpt-4o-mini
+          provider: openai
+        query_variable_selector:
+        - sys
+        - query
+        selected: false
+        title: Question Classifier
+        type: question-classifier
+      height: 136
+      id: classifier-node
+      position:
+        x: 384
+        y: 282
+      positionAbsolute:
+        x: 384
+        y: 282
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: gpt-4o
+          provider: openai
+        prompt_template:
+        - role: system
+          text: "Você é Solano, SDR Hunter da Kelevra Corp. Seu objetivo é qualificar o lead usando BANT sutil e levá-lo para uma call de 5 minutos.\n\n# Regras de Ouro\n1. SEJA HUMANO: Use Opa, Cara, aja como um brasileiro profissional mas descontraído.\n2. PROIBIDO: NUNCA use tópicos com pontos (bullet points), listas numeradas ou formatação robótica de IA. Escreva textos corridos de no máximo 3 a 4 linhas.\n3. PESQUISA (COLD READING): Se você receber contexto do site/pesquisa do lead, cite isso casualmente!\n4. UMA PERGUNTA POR VEZ: Nunca faça duas perguntas BANT na mesma mensagem.\n\n# Objetivo Final\nSe o lead já validou que tem dor e concordou com o serviço, adicione EXATAMENTE esta tag no final da mensagem para liberar a agenda:\n[REUNIAO_MARCADA]"
+        selected: false
+        title: LLM Especialista SDR
+        type: llm
+        variables: []
+      height: 98
+      id: llm-bant-node
+      position:
+        x: 984
+        y: 282
+      positionAbsolute:
+        x: 984
+        y: 282
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        provider_id: duckduckgo
+        provider_name: duckduckgo
+        provider_type: builtin
+        selected: false
+        title: DuckDuckGo Search
+        tool_configurations: {}
+        tool_name: ddg_search
+        tool_parameters:
+          query:
+            type: mixed
+            value: '{{#sys.query#}} empresa'
+        type: tool
+      height: 98
+      id: tool-search-node
+      position:
+        x: 684
+        y: 182
+      positionAbsolute:
+        x: 684
+        y: 182
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params:
+            temperature: 0.5
+          mode: chat
+          name: gpt-4o-mini
+          provider: openai
+        prompt_template:
+        - role: system
+          text: Você é o especialista de objeções da Kelevra. Responda amigavelmente (sem bullets) e finalize com uma pergunta direcionando para a Call.
+        selected: false
+        title: LLM Objeção
+        type: llm
+        variables: []
+      height: 98
+      id: llm-objection-node
+      position:
+        x: 684
+        y: 382
+      positionAbsolute:
+        x: 684
+        y: 382
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        answer: '[HANDOFF] Claro, entendo perfeitamente. Vou transferir você para a Gabriela do nosso time assumir o atendimento por aqui, um instante.'
+        desc: ''
+        selected: false
+        title: Handoff
+        type: answer
+      height: 103
+      id: answer-handoff-node
+      position:
+        x: 684
+        y: 482
+      positionAbsolute:
+        x: 684
+        y: 482
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        code: "function main(args) {\n    let text = args.text || '';\n    text = text.replace(/^[-*•]\\s+/gm, ''); \n    text = text.replace(/^\\d+\\.\\s+/gm, '');\n    text = text.replace(/\\n\\n/g, ' ');\n    return { final_response: text.trim() };\n}"
+        code_language: javascript
+        desc: ''
+        outputs:
+          final_response:
+            children: null
+            type: string
+        selected: false
+        title: Anti-Listas
+        type: code
+        variables:
+        - variable: text
+          value_selector:
+          - llm-bant-node
+          - text
+      height: 54
+      id: code-node
+      position:
+        x: 1284
+        y: 282
+      positionAbsolute:
+        x: 1284
+        y: 282
+      selected: false
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        outputs:
+        - value_selector:
+          - code-node
+          - final_response
+          variable: final_response
+        selected: false
+        title: End
+        type: end
+      height: 90
+      id: end-node
+      position:
+        x: 1584
+        y: 282
+      positionAbsolute:
+        x: 1584
+        y: 282
+      selected: false
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1
