@@ -1,0 +1,23 @@
+# Diretrizes Operacionais — Kelevra SalesOps-as-Code
+
+## Idioma e Tom
+- Responder em PT-BR, conciso e técnico.
+- Nunca fazer alterações destrutivas sem autorização.
+
+## Política de Tokens (DeepSeek pay-as-you-go)
+- NÃO ler o repositório inteiro de uma vez.
+- Consultar `.cline_memory/` ANTES de explorar código.
+- Ler apenas o arquivo/trecho relevante.
+
+## Memory Bank (obrigatório antes de tarefa grande)
+1. projectbrief.md — escopo e objetivos
+2. systemPatterns.md — arquitetura e padrões
+3. activeContext.md — tarefa atual e decisões recentes
+4. progress.md — concluído e pendente
+
+## Regras de Engenharia
+- Schema do Supabase é em PORTUGUÊS. Nunca renomear colunas/status em produção.
+- Migrações são ADDITIVE e idempotentes (IF NOT EXISTS).
+- Tabela principal de leads = `leads`; fila SDR = `cold_leads`.
+- Canal WhatsApp híbrido: chip frio (Evolution) + handoff WABA oficial.
+- LLM: deepseek-flash (rotina) / deepseek-reasoner (scoring/causa-raiz).
