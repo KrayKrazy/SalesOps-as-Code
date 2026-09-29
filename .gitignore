@@ -1,0 +1,22 @@
+# Segredos — NUNCA commitar
+.env
+.env.*
+!.env.example
+*.enc
+secrets/
+*vault*
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Logs / artefatos locais
+*.log
+.DS_Store
+Thumbs.db

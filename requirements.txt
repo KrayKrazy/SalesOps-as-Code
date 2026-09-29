@@ -1,0 +1,5 @@
+# Kelevra SalesOps — pipeline 100% stdlib (zero dependências externas).
+# Python 3.8+ (usa apenas urllib, json, os, sys, re, time, uuid, hashlib, datetime).
+# Nada para instalar. Rode direto:
+#   python pipeline\sdr_pipeline.py
+#   python pipeline\corretor.py

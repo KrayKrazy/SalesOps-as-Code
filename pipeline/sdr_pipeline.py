@@ -1,129 +1,163 @@
-"""
-SDR PIPELINE — Kelevra SalesOps (Coletar -> Qualificar -> Disparar -> Logar)
-Fluxo: lê leads pendentes do Supabase -> gera mensagem (DeepSeek) -> envia (Evolution) -> loga/atualiza status.
+# -*- coding: utf-8 -*-
+"""SDR PIPELINE — orquestrador OUTBOUND Kelevra (stdlib only).
+
+Fluxo: vw_leads_para_prospectar -> blocklist -> dedupe 72h -> [scoring ICP]
+       -> abertura (DeepSeek) -> envio (Evolution) -> messages_log -> status.
 
 Uso:
-  python sdr_pipeline.py --dry-run --limit 3     # apenas gera e mostra (sem enviar)
-  python sdr_pipeline.py --send --limit 5        # envia de verdade (cuidado!)
+  python sdr_pipeline.py                     # dry-run, 3 leads (não envia)
+  python sdr_pipeline.py --send --limit 10   # envia de verdade
+  python sdr_pipeline.py --score             # scoring ICP via reasoner (custa mais)
 """
-import json
 import os
 import sys
-import urllib.request
-import urllib.parse
+import time
 
-SUPA_URL = os.environ.get("SUPABASE_PROJECT_URL", "https://omdieogddacchiihjqyl.supabase.co")
-SUPA_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
-DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-EVO_BASE = os.environ.get("EVOLUTION_BASE_URL", "https://evo.vps10393.panel.icontainer.run")
-EVO_APIKEY = os.environ.get("EVOLUTION_API_KEY", "")
-EVO_INSTANCE = os.environ.get("EVO_INSTANCE", "Número comercial")
-
-
-def supabase(method, path, body=None):
-    r = urllib.request.Request(SUPA_URL + path, method=method)
-    r.add_header("apikey", SUPA_KEY)
-    r.add_header("Authorization", "Bearer " + SUPA_KEY)
-    r.add_header("User-Agent", "supabase-js/2.45.0")
-    r.add_header("X-Client-Info", "supabase-js/2.45.0")
-    r.add_header("Content-Type", "application/json")
-    data = json.dumps(body).encode() if body is not None else None
-    try:
-        with urllib.request.urlopen(r, data=data, timeout=30) as resp:
-            raw = resp.read().decode()
-            return json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        print("  [SUPABASE HTTP %s] %s" % (e.code, e.read().decode()[:200]))
-        return None
-
-
-def deepseek(messages, max_tokens=300):
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions", method="POST"
-    )
-    req.add_header("Authorization", "Bearer " + DEEPSEEK_KEY)
-    req.add_header("Content-Type", "application/json")
-    body = json.dumps(
-        {"model": "deepseek-chat", "messages": messages,
-         "max_tokens": max_tokens, "temperature": 0.7}
-    ).encode()
-    with urllib.request.urlopen(req, data=body, timeout=60) as r:
-        return json.loads(r.read().decode())
-
-
-def evolution_send_text(phone, text):
-    instance = urllib.parse.quote(EVO_INSTANCE)
-    req = urllib.request.Request(
-        "%s/message/sendText/%s" % (EVO_BASE, instance), method="POST"
-    )
-    req.add_header("apikey", EVO_APIKEY)
-    req.add_header("Content-Type", "application/json")
-    body = json.dumps({"number": phone, "text": text, "delay": 1500}).encode()
-    with urllib.request.urlopen(req, data=body, timeout=40) as r:
-        return json.loads(r.read().decode())
-
-
-def get_pending_leads(limit):
-    # Fonte: view pronta de prospecção, prioriza audit_score
-    path = (
-        "/rest/v1/vw_leads_para_prospectar"
-        "?select=nome,telefone,category,gmn_rating,gmn_reviews,audit_score,bairro,cidade"
-        "&order=audit_score.desc.nullslast&limit=%d" % limit
-    )
-    rows = supabase("GET", path)
-    return rows or []
-
-
-def generate_message(lead):
-    nome = lead.get("nome") or "negócio local"
-    nicho = lead.get("category") or lead.get("subcategory") or "negócio local"
-    rating = lead.get("gmn_rating")
-    reviews = lead.get("gmn_reviews")
-    bairro = lead.get("bairro")
-    cidade = lead.get("cidade")
-
-    system = (
-        "Você é Solano, SDR Hunter da Kelevra Corp. Seu objetivo é QUALIFICAR o lead "
-        "de forma sutil pelo WhatsApp e AGENDAR uma reunião. O foco exclusivo é vender o "
-        '"Protocolo Presença Blindada" (SEO Local, Google Maps e Funil de Avaliações).\n\n'
-        "DIRETRIZES DE OURO:\n"
-        '1. TOM: 100% humano, descontraído, direto ("Opa", "Cara").\n'
-        "2. PROIBIDO bullet points, listas ou formatação robótica.\n"
-        "3. No máximo 2 a 4 linhas.\n"
-        "4. BANT sutil: 1 ou no máximo 2 perguntas.\n"
-        "5. Cold reading: cite 1 dado real do lead de forma casual.\n"
-        "6. NÃO invente dados que não existam."
-    )
-    user = (
-        "Lead: %s (nicho: %s)." % (nome, nicho)
-        + (" Local: %s, %s." % (bairro, cidade) if bairro or cidade else "")
-        + " Dados reais: rating=%s, reviews=%s." % (rating, reviews)
-        + " Escreva a MENSAGEM DE ABERTURA (primeiro toque, cold reading)."
-    )
-    resp = deepseek(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    )
-    return resp["choices"][0]["message"]["content"].strip()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kelevra as K
 
 
 def main():
-    args = sys.argv[1:]
-    dry_run = "--send" not in args
+    K.setup_console_encoding()
+    argv = sys.argv[1:]
+    dry_run = "--send" not in argv
+    score = "--score" in argv
     limit = 3
-    if "--limit" in args:
-        limit = int(args[args.index("--limit") + 1])
+    if "--limit" in argv:
+        i = argv.index("--limit")
+        if i + 1 < len(argv):
+            try:
+                limit = int(argv[i + 1])
+            except ValueError:
+                limit = 3
+    instance = None
+    if "--instance" in argv:
+        i = argv.index("--instance")
+        if i + 1 < len(argv):
+            instance = argv[i + 1]
 
-    leads = get_pending_leads(limit)
-    print("LEADS PENDENTES:", len(leads))
-    for lead in leads:
-        msg = generate_message(lead)
-        print("\n--- %s (%s) ---" % (lead.get("nome"), lead.get("telefone")))
-        print(msg)
+    cfg = K.get_config()
+    supa = K.Supabase(cfg)
+    ds = K.DeepSeek(cfg)
+    evo = K.Evolution(cfg)
+    if instance:
+        evo.instance = instance
+
+    daily_cap = int(cfg.get("SDR_DAILY_LEAD_CAP", "50") or 50)
+    status_sent = cfg.get("SDR_STATUS_SENT", "contatado")
+
+    if not (supa.url and supa.key):
+        sys.exit("ERRO: Supabase sem URL/KEY (rode setup_env.ps1).")
+    if not ds.key:
+        sys.exit("ERRO: DEEPSEEK_API_KEY ausente.")
+    if not dry_run and not (evo.base and evo.apikey):
+        sys.exit("ERRO: Evolution sem base/apikey.")
+
+    print("=" * 70)
+    print("KELEVRA SDR PIPELINE — %s" % ("DRY-RUN (não envia)" if dry_run else "ENVIO REAL"))
+    print("Instância: %s | conversa: %s | scoring: %s"
+          % (evo.instance, ds.chat_model, ds.reason_model))
+    print("=" * 70)
+
+    sent_today = K.count_sent_today(supa)
+    print("Disparos hoje: %d / cap %d" % (sent_today, daily_cap))
+    if not dry_run and sent_today >= daily_cap:
+        sys.exit("Cap diário atingido (anti-ban). Abortando.")
+
+    if limit and limit > 0:
+        n = limit
         if not dry_run:
-            r = evolution_send_text(lead["telefone"], msg)
-            print("[ENVIADO] %s" % json.dumps(r, ensure_ascii=False))
+            n = min(limit, daily_cap - sent_today)
+    else:
+        n = daily_cap - sent_today
+    leads = K.get_pending_leads(supa, limit=n)
+    if not leads:
+        sys.exit("Nenhum lead pendente em vw_leads_para_prospectar.")
+
+    print("Leads pendentes: %d\n" % len(leads))
+    ok = skipped = failed = 0
+
+    for idx, lead in enumerate(leads, 1):
+        trace = K.trace_id()
+        phone = K.normalize_phone(lead.get("telefone") or "")
+        nome = lead.get("nome") or "(sem nome)"
+        lid = lead.get("id")
+        print("[%d/%d] %s | %s" % (idx, len(leads), nome, phone or "SEM TEL"))
+
+        if not phone:
+            print("  ⏭ sem telefone válido")
+            skipped += 1
+            continue
+        if K.is_blocked(supa, phone):
+            print("  ⏭ bloqueado (blocklist)")
+            skipped += 1
+            continue
+        if K.was_contacted_recently(supa, phone, 72):
+            print("  ⏭ contatado nas últimas 72h (dedupe)")
+            skipped += 1
+            continue
+
+        icp_reason = None
+        if score:
+            try:
+                t0 = time.time()
+                icp, icp_reason, u = K.score_lead(ds, lead)
+                lat = int((time.time() - t0) * 1000)
+                print("  ICP=%d (%s)" % (icp, icp_reason))
+                K.record_agent_run(supa, "prospector", lid, ds.reason_model, "ok",
+                                   {"icp_score": icp}, u.get("prompt_tokens", 0),
+                                   u.get("completion_tokens", 0), trace, lat)
+            except Exception as e:
+                print("  ⚠ scoring falhou: %s" % e)
+                K.log_error(supa, "prospector", lid, "score_error", e, {"trace": trace})
+
+        try:
+            t0 = time.time()
+            text, u = K.generate_opening(ds, lead, icp_reason)
+            lat = int((time.time() - t0) * 1000)
+        except Exception as e:
+            print("  ✗ geração falhou: %s" % e)
+            K.log_error(supa, "qualificador", lid, "generate_error", e, {"trace": trace})
+            failed += 1
+            continue
+        if not text:
+            print("  ✗ mensagem vazia")
+            failed += 1
+            continue
+
+        print("  ── %s" % text.replace("\n", " ")[:140])
+
+        if dry_run:
+            print("  [DRY-RUN] não enviado")
+            ok += 1
+            continue
+
+        try:
+            st, resp = evo.send_text(phone, text)
+        except Exception as e:
+            st, resp = -1, str(e)
+
+        if st in (200, 201):
+            K.log_message(supa, lead, text, "sent", http_resp=resp, trace=trace)
+            if lid is not None:
+                try:
+                    supa.update("leads", {"status": status_sent}, "id", lid)
+                except Exception:
+                    pass
+            K.record_agent_run(supa, "qualificador", lid, ds.chat_model, "sent",
+                               {"telefone": phone}, u.get("prompt_tokens", 0),
+                               u.get("completion_tokens", 0), trace, lat)
+            print("  ✔ enviado")
+            ok += 1
         else:
-            print("[DRY-RUN — não enviado]")
+            K.log_message(supa, lead, text, "failed", error=str(resp), trace=trace)
+            K.log_error(supa, "qualificador", lid, "send_error", resp, {"trace": trace})
+            print("  ✗ falha (%s): %s" % (st, str(resp)[:200]))
+            failed += 1
+
+    print("\n" + "=" * 70)
+    print("RESUMO: ok=%d pulados=%d falhas=%d" % (ok, skipped, failed))
+    print("=" * 70)
 
 
 if __name__ == "__main__":
