@@ -1,0 +1,336 @@
+{
+  "name": "Outbound SDR Machine (Kelevra)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Gatilho de Prospecção",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH atualizados AS (\n    UPDATE leads SET stage = 'Processando'\n    WHERE id IN (\n        SELECT id FROM leads \n        WHERE stage = 'Triagem' AND telefone IS NOT NULL \n        LIMIT 5 FOR UPDATE SKIP LOCKED\n    ) RETURNING *\n)\nSELECT * FROM atualizados;"
+      },
+      "id": "2",
+      "name": "Buscar Lote (Supabase)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [220, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-kelevra",
+          "name": "Postgres (Supabase)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "3",
+      "name": "Processar um a um",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://vps10393.panel.icontainer.run:8080/chat/whatsappNumbers/Número comercial",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "Y8kxBY7eTxEQw8TyseGWsR5BdG3Gksp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "numbers",
+              "value": "={{ [ $json.telefone ] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4",
+      "name": "Validar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json[0].exists }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "5",
+      "name": "WhatsApp Ativo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET stage = 'Desqualificado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
+      },
+      "id": "6",
+      "name": "Desqualificar (Sem WPP)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [1100, 460],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-kelevra",
+          "name": "Postgres (Supabase)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify.kelevra.shop/v1/chat-messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer SUA_CHAVE_API_DO_FLUXO_SDR"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "inputs",
+              "value": "={ \"nome\": \"{{ $('Processar um a um').item.json.nome }}\", \"nicho\": \"{{ $('Processar um a um').item.json.nicho_kelevra }}\", \"rating\": \"{{ $('Processar um a um').item.json.gmn_rating }}\" }"
+            },
+            {
+              "name": "query",
+              "value": "Gere a mensagem de abordagem para este lead baseado nos dados fornecidos."
+            },
+            {
+              "name": "response_mode",
+              "value": "blocking"
+            },
+            {
+              "name": "user",
+              "value": "n8n-automacao"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7",
+      "name": "Gerar Copy (Dify SDR)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1100, 160]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://vps10393.panel.icontainer.run:8080/message/sendText/Número comercial",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "Y8kxBY7eTxEQw8TyseGWsR5BdG3Gksp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('Processar um a um').item.json.telefone }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.answer }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8",
+      "name": "Disparar Mensagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1320, 160]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET stage = 'Contactado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
+      },
+      "id": "9",
+      "name": "Atualizar CRM",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [1540, 160],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-kelevra",
+          "name": "Postgres (Supabase)"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "10",
+      "name": "Voltar pro Loop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1740, 300]
+    }
+  ],
+  "connections": {
+    "Gatilho de Prospecção": {
+      "main": [
+        [
+          {
+            "node": "Buscar Lote (Supabase)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Lote (Supabase)": {
+      "main": [
+        [
+          {
+            "node": "Processar um a um",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar um a um": {
+      "main": [
+        [
+          {
+            "node": "Validar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Ativo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Ativo?": {
+      "main": [
+        [
+          {
+            "node": "Gerar Copy (Dify SDR)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Desqualificar (Sem WPP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Desqualificar (Sem WPP)": {
+      "main": [
+        [
+          {
+            "node": "Voltar pro Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Copy (Dify SDR)": {
+      "main": [
+        [
+          {
+            "node": "Disparar Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Disparar Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Atualizar CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar CRM": {
+      "main": [
+        [
+          {
+            "node": "Voltar pro Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voltar pro Loop": {
+      "main": [
+        [
+          {
+            "node": "Processar um a um",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}
