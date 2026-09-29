@@ -22,6 +22,7 @@ def main():
     argv = sys.argv[1:]
     dry_run = "--send" not in argv
     score = "--score" in argv
+    validate = "--no-validate" not in argv
     limit = 3
     if "--limit" in argv:
         i = argv.index("--limit")
@@ -77,6 +78,29 @@ def main():
     print("Leads pendentes: %d\n" % len(leads))
     ok = skipped = failed = 0
 
+    # Pré-validação de WhatsApp (bloqueia inválidos antes de enviar)
+    validation = {}
+    if validate:
+        candidate_phones = []
+        for lead in leads:
+            ph = K.normalize_phone(lead.get("telefone") or "")
+            if not ph or K.is_blocked(supa, ph) or K.was_contacted_recently(supa, ph, 72):
+                continue
+            candidate_phones.append(ph)
+        if candidate_phones:
+            uniq_phones = list(dict.fromkeys(candidate_phones))
+            print("Validando WhatsApp de %d número(s) únicos..." % len(uniq_phones))
+            validation = K.check_whatsapp_batch(evo, uniq_phones)
+            blocked_now = 0
+            for ph, exists in validation.items():
+                if exists is False:
+                    if not dry_run:
+                        K.block_phone(supa, ph, reason="sem_whatsapp_auto")
+                    blocked_now += 1
+            if blocked_now:
+                print("  Bloqueados (sem WhatsApp): %d" % blocked_now)
+            print()
+
     for idx, lead in enumerate(leads, 1):
         trace = K.trace_id()
         phone = K.normalize_phone(lead.get("telefone") or "")
@@ -94,6 +118,10 @@ def main():
             continue
         if K.was_contacted_recently(supa, phone, 72):
             print("  ⏭ contatado nas últimas 72h (dedupe)")
+            skipped += 1
+            continue
+        if validate and phone in validation and validation[phone] is False:
+            print("  ⏭ sem WhatsApp (validado ao vivo)")
             skipped += 1
             continue
 

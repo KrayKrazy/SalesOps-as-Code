@@ -235,6 +235,40 @@ class Evolution:
         client = HttpClient(self.base, {"apikey": self.apikey}, timeout=45)
         return client.request("POST", path, body=body)
 
+
+def check_whatsapp_batch(evo, phones, batch=100):
+    """Valida existência de WhatsApp em lote. Retorna {phone: bool|None}."""
+    out = {}
+    if not phones:
+        return out
+    inst = urllib.parse.quote(evo.instance)
+    client = HttpClient(evo.base, {"apikey": evo.apikey}, timeout=60)
+    for i in range(0, len(phones), batch):
+        chunk = phones[i:i + batch]
+        st, data = client.request("POST", "/chat/whatsappNumbers/" + inst,
+                                  body={"numbers": chunk})
+        if st == 200 and isinstance(data, list) and len(data) == len(chunk):
+            for n, d in zip(chunk, data):
+                out[n] = bool(d.get("exists")) if isinstance(d, dict) else None
+        else:
+            for n in chunk:
+                out[n] = None
+    return out
+
+
+def block_phone(supa, phone, reason="sem_whatsapp"):
+    """Adiciona número à blocklist (idempotente por phone)."""
+    existing = supa.get("blocked_numbers",
+                        "phone=eq.%s&select=phone" % urllib.parse.quote(phone))
+    if existing:
+        return True
+    payload = {"phone": phone, "reason": reason, "blocked_at": now_iso()}
+    try:
+        return supa.insert("blocked_numbers", payload)
+    except Exception:
+        return False
+
+
 def is_blocked(supa, phone):
     """True se o número está em qualquer blocklist (LGPD/opt-out)."""
     for table in ("blocked_numbers", "blocked_contacts"):
