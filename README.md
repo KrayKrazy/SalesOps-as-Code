@@ -42,6 +42,8 @@ python pipeline\corretor.py --list-failed
 
 ## Anti-ban / segurança
 - Cap diário de disparos (`SDR_DAILY_LEAD_CAP`, padrão 50).
+- Round-robin entre instâncias ativas (`whatsapp_instances`) com quota por instância
+  (`SDR_QUOTA_PER_INSTANCE`, padrão 48). Instâncias em cooldown/quarentena são puladas.
 - Blocklist (`blocked_numbers`/`blocked_contacts`) e dedupe de 72h.
 - Sem `--send` é sempre dry-run (nunca envia).
 

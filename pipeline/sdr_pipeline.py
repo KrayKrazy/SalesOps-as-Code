@@ -2,7 +2,8 @@
 """SDR PIPELINE — orquestrador OUTBOUND Kelevra (stdlib only).
 
 Fluxo: vw_leads_para_prospectar -> blocklist -> dedupe 72h -> [scoring ICP]
-       -> abertura (DeepSeek) -> envio (Evolution) -> messages_log -> status.
+       -> abertura (DeepSeek) -> envio (Evolution, round-robin anti-ban)
+       -> messages_log -> status.
 
 Uso:
   python sdr_pipeline.py                     # dry-run, 3 leads (não envia)
@@ -45,7 +46,16 @@ def main():
         evo.instance = instance
 
     daily_cap = int(cfg.get("SDR_DAILY_LEAD_CAP", "50") or 50)
+    per_instance_quota = cfg.get("SDR_QUOTA_PER_INSTANCE") or None
     status_sent = cfg.get("SDR_STATUS_SENT", "contatado")
+
+    if instance:
+        evo.instance = instance
+        pool = K.InstancePool([{"name": instance, "quota": 10 ** 9, "sent_today": 0}])
+    else:
+        pool = K.InstancePool(K.get_whatsapp_pool(supa, evo.instance, per_instance_quota))
+    if pool.instances:
+        evo.instance = pool.instances[0]["name"]
 
     if not (supa.url and supa.key):
         sys.exit("ERRO: Supabase sem URL/KEY (rode setup_env.ps1).")
@@ -56,8 +66,8 @@ def main():
 
     print("=" * 70)
     print("KELEVRA SDR PIPELINE — %s" % ("DRY-RUN (não envia)" if dry_run else "ENVIO REAL"))
-    print("Instância: %s | conversa: %s | scoring: %s"
-          % (evo.instance, ds.chat_model, ds.reason_model))
+    print("Pool de instâncias: %s" % (pool.summary() or evo.instance))
+    print("Conversa: %s | scoring: %s" % (ds.chat_model, ds.reason_model))
     print("=" * 70)
 
     sent_today = K.count_sent_today(supa)
@@ -160,12 +170,21 @@ def main():
             ok += 1
             continue
 
+        inst = pool.next()
+        if inst is None:
+            print("  ⏹ todas as instâncias atingiram a quota diária — abortando envio")
+            skipped += 1
+            break
+        evo.instance = inst["name"]
+
         try:
             st, resp = evo.send_text(phone, text)
         except Exception as e:
             st, resp = -1, str(e)
 
         if st in (200, 201):
+            pool.record_send(inst)
+            K.increment_instance_sent(supa, inst["name"])
             K.log_message(supa, lead, text, "sent", http_resp=resp, trace=trace)
             if lid is not None:
                 try:
@@ -173,14 +192,16 @@ def main():
                 except Exception:
                     pass
             K.record_agent_run(supa, "qualificador", lid, ds.chat_model, "sent",
-                               {"telefone": phone}, u.get("prompt_tokens", 0),
+                               {"telefone": phone, "instance": inst["name"]},
+                               u.get("prompt_tokens", 0),
                                u.get("completion_tokens", 0), trace, lat)
-            print("  ✔ enviado")
+            print("  ✔ enviado via %s" % inst["name"])
             ok += 1
         else:
             K.log_message(supa, lead, text, "failed", error=str(resp), trace=trace)
-            K.log_error(supa, "qualificador", lid, "send_error", resp, {"trace": trace})
-            print("  ✗ falha (%s): %s" % (st, str(resp)[:200]))
+            K.log_error(supa, "qualificador", lid, "send_error", resp,
+                        {"trace": trace, "instance": inst["name"]})
+            print("  ✗ falha (%s) via %s: %s" % (st, inst["name"], str(resp)[:200]))
             failed += 1
 
     print("\n" + "=" * 70)

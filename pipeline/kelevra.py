@@ -269,6 +269,110 @@ def block_phone(supa, phone, reason="sem_whatsapp"):
         return False
 
 
+def get_whatsapp_pool(supa, default_instance="Número comercial", quota=None):
+    """Pool de instâncias ativas para round-robin (anti-ban).
+
+    Lê a tabela `whatsapp_instances` (migração 0001) filtrando instâncias com
+    status `active/open/connected` e fora de cooldown/quarentena. Se a tabela
+    não existir (migração pendente) ou estiver vazia, degrada graciosamente
+    para uma única instância `default_instance`.
+    """
+    rows = supa.get(
+        "whatsapp_instances",
+        "select=instance_name,daily_quota,sent_today,status,cooldown_until"
+        "&order=id.asc",
+    ) or []
+    pool = []
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        name = (r.get("instance_name") or "").strip()
+        if not name:
+            continue
+        status = (r.get("status") or "active").strip().lower()
+        if status not in ("active", "open", "connected"):
+            continue
+        cooldown = r.get("cooldown_until")
+        if cooldown:
+            try:
+                cd = datetime.fromisoformat(str(cooldown).replace("Z", "+00:00"))
+                if cd.tzinfo is None:
+                    cd = cd.replace(tzinfo=timezone.utc)
+                if now < cd:
+                    continue  # em cooldown/quarentena
+            except Exception:
+                pass
+        q = quota or r.get("daily_quota") or 48
+        try:
+            q = int(q)
+        except Exception:
+            q = 48
+        s = r.get("sent_today") or 0
+        try:
+            s = int(s)
+        except Exception:
+            s = 0
+        pool.append({"name": name, "quota": q, "sent_today": s})
+
+    if not pool:
+        q = quota or 48
+        pool = [{"name": default_instance, "quota": q, "sent_today": 0}]
+    return pool
+
+
+class InstancePool:
+    """Round-robin sobre instâncias com quota por instância (anti-ban)."""
+
+    def __init__(self, instances):
+        self.instances = list(instances or [])
+        self._cursor = 0
+
+    def next(self):
+        """Retorna a próxima instância com quota restante, ou None."""
+        n = len(self.instances)
+        if n == 0:
+            return None
+        for _ in range(n):
+            inst = self.instances[self._cursor % n]
+            self._cursor += 1
+            if int(inst.get("sent_today") or 0) < int(inst.get("quota") or 0):
+                return inst
+        return None
+
+    def record_send(self, inst):
+        if inst is not None:
+            inst["sent_today"] = int(inst.get("sent_today") or 0) + 1
+
+    def summary(self):
+        return ", ".join(
+            "%s (%d/%d)" % (i["name"], int(i.get("sent_today") or 0),
+                            int(i.get("quota") or 0))
+            for i in self.instances
+        )
+
+
+def increment_instance_sent(supa, instance_name):
+    """Incrementa `sent_today` da instância no banco (best-effort, não fatal)."""
+    if not instance_name:
+        return False
+    try:
+        rows = supa.get(
+            "whatsapp_instances",
+            "instance_name=eq.%s&select=id,sent_today"
+            % urllib.parse.quote(str(instance_name)),
+        ) or []
+        if not rows:
+            return False
+        current = int(rows[0].get("sent_today") or 0)
+        return supa.update(
+            "whatsapp_instances",
+            {"sent_today": current + 1},
+            "instance_name",
+            instance_name,
+        )
+    except Exception:
+        return False
+
+
 def is_blocked(supa, phone):
     """True se o número está em qualquer blocklist (LGPD/opt-out)."""
     for table in ("blocked_numbers", "blocked_contacts"):
