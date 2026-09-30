@@ -30,8 +30,8 @@
       "position": [220, 300],
       "credentials": {
         "postgres": {
-          "id": "postgres-kelevra",
-          "name": "Postgres (Supabase)"
+          "id": "kelevra_db_cred_01",
+          "name": "Kelevra DB"
         }
       }
     },
@@ -96,7 +96,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE leads SET stage = 'Desqualificado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
+        "query": "UPDATE leads SET status = 'desqualificado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
       },
       "id": "6",
       "name": "Desqualificar (Sem WPP)",
@@ -105,8 +105,8 @@
       "position": [1100, 460],
       "credentials": {
         "postgres": {
-          "id": "postgres-kelevra",
-          "name": "Postgres (Supabase)"
+          "id": "kelevra_db_cred_01",
+          "name": "Kelevra DB"
         }
       }
     },
@@ -189,7 +189,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE leads SET stage = 'Contactado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
+        "query": "UPDATE leads SET status = 'contatado' WHERE id = '{{ $('Processar um a um').item.json.id }}'"
       },
       "id": "9",
       "name": "Atualizar CRM",
@@ -198,8 +198,8 @@
       "position": [1540, 160],
       "credentials": {
         "postgres": {
-          "id": "postgres-kelevra",
-          "name": "Postgres (Supabase)"
+          "id": "kelevra_db_cred_01",
+          "name": "Kelevra DB"
         }
       }
     },
