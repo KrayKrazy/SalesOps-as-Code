@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Kelevra SalesOps — núcleo compartilhado do motor multi-agente.
 
 100% biblioteca padrão (stdlib). Sem dependências externas. Python 3.8+.
@@ -19,11 +18,10 @@ import json
 import os
 import re
 import sys
-import time
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 
 DEFAULT_ENV_PATHS = [
@@ -82,6 +80,48 @@ def normalize_phone(phone):
     return digits
 
 
+def parse_closed_line(line):
+    """Extrai (nome, telefone_normalizado) de uma linha do txt de clientes fechados.
+
+    Aceita praticamente qualquer formato: só o telefone, "Nome 11999999999",
+    "Nome;11 99999-9999", "+55 (11) 99999-9999", CSV, etc. Linhas vazias ou
+    iniciadas por '#' são ignoradas. Retorna (None, None) se não houver telefone.
+    """
+    line = (line or "").strip()
+    if not line or line.startswith("#"):
+        return None, None
+    # Telefone: ÚLTIMO bloco de dígitos (com separadores) da linha. Assim,
+    # dígitos no NOME (ex.: "Fórmula 1 Auto Center") não contaminam o número.
+    m = re.search(r"(\+?\s*\d[\d\s().\-]{6,})\s*$", line)
+    phone = normalize_phone(re.sub(r"\D", "", m.group(1))) if m else ""
+    if not phone:
+        return None, None
+    name = line[:m.start()].strip(" \t;|,:-()+") if m else ""
+    if not re.search(r"[A-Za-z\u00c0-\u00ff]", name):
+        name = ""
+    return name, phone
+
+
+def read_closed_phones(path):
+    """Lê o txt de clientes fechados e retorna {telefone_normalizado: nome}.
+
+    Usado tanto pelo `block_closed.py` (persistir na blocklist) quanto pelo
+    `sdr_pipeline.py` (blocklist local em memória, como rede de segurança).
+    """
+    out = {}
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            for raw in fh:
+                name, phone = parse_closed_line(raw)
+                if phone:
+                    out.setdefault(phone, name or "")
+    except Exception:
+        pass
+    return out
+
+
 def trace_id():
     return uuid.uuid4().hex
 
@@ -107,8 +147,8 @@ def _extract_json(text):
         text = text[start:end + 1]
     try:
         return json.loads(text)
-    except Exception:
-        return {}
+    except Exception as e:
+        raise ValueError(f"Falha de Parsing JSON da LLM. Texto bruto: {text[:200]}... Erro: {e}")
 
 
 class HttpClient:
@@ -117,6 +157,8 @@ class HttpClient:
     def __init__(self, base_url, default_headers=None, timeout=30):
         self.base_url = (base_url or "").rstrip("/")
         self.default_headers = default_headers or {}
+        if "User-Agent" not in self.default_headers and "user-agent" not in self.default_headers:
+            self.default_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         self.timeout = timeout
 
     def request(self, method, path, body=None, headers=None, timeout=None):
@@ -179,7 +221,7 @@ class Supabase:
         return status in (200, 201)
 
     def update(self, table, payload, match_col, match_val):
-        q = "%s=eq.%s" % (match_col, urllib.parse.quote(str(match_val)))
+        q = f"{match_col}=eq.{urllib.parse.quote(str(match_val))}"
         status, _ = self.client.request(
             "PATCH", self._path(table, q), body=payload,
             headers={"Prefer": "return=minimal"},
@@ -192,11 +234,15 @@ class DeepSeek:
 
     def __init__(self, cfg):
         self.key = cfg.get("DEEPSEEK_API_KEY", "")
-        self.chat_model = cfg.get("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
-        self.reason_model = cfg.get("DEEPSEEK_REASON_MODEL", "deepseek-reasoner")
+        self.chat_model = cfg.get("DEEPSEEK_CHAT_MODEL", "deepseek/deepseek-chat")
+        self.reason_model = cfg.get("DEEPSEEK_REASON_MODEL", "deepseek/deepseek-chat")
         self.client = HttpClient(
-            "https://api.deepseek.com",
-            {"Authorization": "Bearer " + self.key},
+            "https://openrouter.ai/api/v1",
+            {
+                "Authorization": "Bearer " + self.key,
+                "HTTP-Referer": "https://kelevra.shop",
+                "X-Title": "Kelevra SalesOps"
+            },
             timeout=30,
         )
 
@@ -210,13 +256,13 @@ class DeepSeek:
         status, data = self.client.request(
             "POST", "/chat/completions", body=body, timeout=90)
         if status != 200:
-            raise RuntimeError("DeepSeek HTTP %s: %s" % (status, str(data)[:200]))
+            raise RuntimeError(f"DeepSeek HTTP {status}: {str(data)[:200]}")
         usage = data.get("usage") or {}
         content = ""
         try:
             content = data["choices"][0]["message"].get("content") or ""
-        except Exception:
-            pass
+        except Exception as e:
+            raise RuntimeError(f"API retornou resposta malformada (sem choices). Resposta bruta: {str(data)[:300]}... Erro: {e}")
         return content.strip(), usage
 
 
@@ -233,6 +279,20 @@ class Evolution:
         path = "/message/sendText/" + inst
         body = {"number": phone, "text": text, "delay": delay}
         client = HttpClient(self.base, {"apikey": self.apikey}, timeout=45)
+        return client.request("POST", path, body=body)
+
+    def find_messages(self, where=None, page=1, limit=100):
+        """Lista mensagens (chat) da instância. Retorna (status, data).
+
+        `data` tem a forma {"messages": {"records": [...], "total": N, "pages": N}}.
+        `where` aceita filtro Mongo-like (ex.: {"key": {"fromMe": false}}).
+        """
+        inst = urllib.parse.quote(self.instance)
+        path = "/chat/findMessages/" + inst
+        body = {"page": page, "limit": limit}
+        if where:
+            body["where"] = where
+        client = HttpClient(self.base, {"apikey": self.apikey}, timeout=60)
         return client.request("POST", path, body=body)
 
 
@@ -259,14 +319,15 @@ def check_whatsapp_batch(evo, phones, batch=100):
 def block_phone(supa, phone, reason="sem_whatsapp"):
     """Adiciona número à blocklist (idempotente por phone)."""
     existing = supa.get("blocked_numbers",
-                        "phone=eq.%s&select=phone" % urllib.parse.quote(phone))
+                        f"phone=eq.{urllib.parse.quote(phone)}&select=phone")
     if existing:
         return True
     payload = {"phone": phone, "reason": reason, "blocked_at": now_iso()}
     try:
         return supa.insert("blocked_numbers", payload)
-    except Exception:
-        return False
+    except Exception as e:
+        print(f"❌ FALHA CRÍTICA: Não foi possível inserir na blocklist. Erro: {e}")
+        raise
 
 
 def get_whatsapp_pool(supa, default_instance="Número comercial", quota=None):
@@ -357,8 +418,7 @@ def increment_instance_sent(supa, instance_name):
     try:
         rows = supa.get(
             "whatsapp_instances",
-            "instance_name=eq.%s&select=id,sent_today"
-            % urllib.parse.quote(str(instance_name)),
+            f"instance_name=eq.{urllib.parse.quote(str(instance_name))}&select=id,sent_today",
         ) or []
         if not rows:
             return False
@@ -376,10 +436,74 @@ def increment_instance_sent(supa, instance_name):
 def is_blocked(supa, phone):
     """True se o número está em qualquer blocklist (LGPD/opt-out)."""
     for table in ("blocked_numbers", "blocked_contacts"):
-        rows = supa.get(table, "phone=eq.%s&select=phone" % urllib.parse.quote(phone))
+        rows = supa.get(table, f"phone=eq.{urllib.parse.quote(phone)}&select=phone")
         if rows:
             return True
     return False
+
+
+def fetch_all(supa, table, cols, extra="", limit=1000, max_rows=10000):
+    """Pagina uma tabela PostgREST (contorna o max-rows padrão de 1000).
+
+    `extra` aceita o restante da query string (ex.: "direction=eq.inbound&order=...").
+    """
+    out = []
+    offset = 0
+    while offset < max_rows:
+        q = f"select={cols}"
+        if extra:
+            q += "&" + extra
+        q += "&limit=%d&offset=%d" % (limit, offset)
+        rows = supa.get(table, q) or []
+        out.extend(rows)
+        if len(rows) < limit:
+            break
+        offset += limit
+    return out
+
+
+def get_respondents(supa, done_status="finalizado"):
+    """Lista priorizada de respondentes pendentes de follow-up (soft-delete).
+
+    Junta messages_log (inbound) com leads. Exclui leads com status `done_status`
+    e 'desqualificado'. Ordena por resposta mais recente e, no desempate, por
+    maior audit_score.
+    """
+    inbound = fetch_all(supa, "messages_log", "telefone,lead_id,content,created_at",
+                        extra="direction=eq.inbound&order=created_at.desc")
+    leads = fetch_all(supa, "leads",
+                      "id,nome,telefone,category,subcategory,audit_score,gmn_rating,status")
+    lead_by_phone = {}
+    for l in leads:
+        ph = normalize_phone(l.get("telefone") or "")
+        if ph and ph not in lead_by_phone:
+            lead_by_phone[ph] = l
+
+    latest = {}
+    for m in inbound:
+        ph = normalize_phone(m.get("telefone") or "")
+        if not ph or ph in latest:
+            continue
+        latest[ph] = m
+
+    rows = []
+    for ph, m in latest.items():
+        lead = lead_by_phone.get(ph) or {}
+        status = (lead.get("status") or "").lower()
+        if status in (done_status.lower(), "desqualificado"):
+            continue
+        rows.append({
+            "id": lead.get("id") or "",
+            "nome": lead.get("nome") or "(sem nome)",
+            "telefone": ph,
+            "nicho": (lead.get("category") or lead.get("subcategory") or ""),
+            "audit_score": lead.get("audit_score") or 0,
+            "gmn_rating": lead.get("gmn_rating"),
+            "resposta": (m.get("content") or "")[:200],
+            "ultima_resposta": m.get("created_at") or "",
+        })
+    rows.sort(key=lambda r: (r["ultima_resposta"], r["audit_score"] or 0), reverse=True)
+    return rows
 
 
 def get_pending_leads(supa, limit=10, offset=0):
@@ -390,8 +514,8 @@ def get_pending_leads(supa, limit=10, offset=0):
 
 
 def last_outbound(supa, phone):
-    q = ("telefone=eq.%s&direction=eq.outbound&order=created_at.desc&limit=1"
-         "&select=created_at,status" % urllib.parse.quote(phone))
+    q = (f"telefone=eq.{urllib.parse.quote(phone)}&direction=eq.outbound&order=created_at.desc&limit=1"
+         "&select=created_at,status")
     rows = supa.get("messages_log", q)
     return rows[0] if rows else None
 
@@ -411,8 +535,7 @@ def was_contacted_recently(supa, phone, hours=72):
 def count_sent_today(supa, workflow="sdr_pipeline"):
     start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0).isoformat()
-    q = ("direction=eq.outbound&created_at=gte.%s&select=id&limit=1000"
-         % urllib.parse.quote(start))
+    q = (f"direction=eq.outbound&created_at=gte.{urllib.parse.quote(start)}&select=id&limit=1000")
     rows = supa.get("messages_log", q)
     return len(rows) if rows is not None else 0
 
@@ -430,6 +553,7 @@ def log_message(supa, lead, text, status, error=None, http_resp=None,
         "workflow_name": "sdr_pipeline",
         "follow_up_num": follow_up_num,
         "sent_at": now_iso() if status == "sent" else None,
+        "created_at": now_iso(),
         "trace_id": trace,
     }
     if error:
@@ -506,12 +630,12 @@ def score_lead(deepseek, lead):
     score = parsed.get("icp_score", 0)
     try:
         score = int(score)
-    except Exception:
-        score = 0
+    except Exception as e:
+        raise ValueError(f"Falha ao interpretar ICP Score da LLM: {score}. Erro: {e}")
     return score, parsed.get("icp_reason", ""), usage
 
 
-def generate_opening(deepseek, lead, icp_reason=None):
+def generate_opening(deepseek, lead, icp_reason=None, seo_dossier=None):
     """Qualificador: mensagem de abertura (primeiro toque, cold reading)."""
     nome = lead.get("nome") or "negócio local"
     nicho = lead.get("category") or lead.get("subcategory") or "negócio local"
@@ -521,25 +645,79 @@ def generate_opening(deepseek, lead, icp_reason=None):
     cidade = lead.get("cidade")
 
     system = (
-        "Você é Solano, SDR Hunter da Kelevra Corp. Seu objetivo é QUALIFICAR o lead "
-        "de forma sutil pelo WhatsApp e AGENDAR uma reunião. O foco exclusivo é vender "
-        'o "Protocolo Presença Blindada" (SEO Local, Google Maps e Funil de Avaliações).\n\n'
+        "Você é Solano, SDR Hunter da Kelevra Corp. Seu objetivo é INICIAR CONVERSA com o lead "
+        "de forma sutil pelo WhatsApp.\n\n"
         "DIRETRIZES DE OURO:\n"
-        '1. TOM: 100% humano, descontraído, direto ("Opa", "Cara").\n'
+        '1. TOM: 100% humano, descontraído, direto ("Opa", "Fala cara", etc).\n'
         "2. PROIBIDO bullet points, listas ou formatação robótica.\n"
-        "3. No máximo 2 a 4 linhas.\n"
-        "4. BANT sutil: 1 ou no máximo 2 perguntas.\n"
-        "5. Cold reading: cite 1 dado real do lead de forma casual.\n"
-        "6. NÃO invente dados que não existam."
+        "3. PROIBIDO usar aspas em volta da mensagem.\n"
+        "4. No máximo 2 a 3 linhas curtas.\n"
+        "5. Cold reading: cite 1 dado da pesquisa de forma natural e rápida no meio da conversa.\n"
+        "6. PERGUNTA DE FECHAMENTO: Termine SEMPRE perguntando de forma casual 'por onde vocês estão captando a maioria dos clientes hoje?' (ou variação similar). NÃO tente vender ou oferecer solução nessa primeira mensagem."
     )
     user = (
-        "Lead: %s (nicho: %s)." % (nome, nicho)
-        + (" Local: %s, %s." % (bairro, cidade) if bairro or cidade else "")
-        + " Dados reais: rating=%s, reviews=%s." % (rating, reviews)
+        f"Lead: {nome} (nicho: {nicho})."
+        + (f" Local: {bairro}, {cidade}." if bairro or cidade else "")
     )
+    if seo_dossier:
+        user += f" \nFATOS EXTRAÍDOS DA PESQUISA SOBRE O LEAD: {seo_dossier}. \n\nINSTRUÇÃO: Use um desses fatos (ex: vi o site X, vi o insta Y, notei a nota Z no Google) de forma ultra natural na abertura."
+    else:
+        user += f" Dados reais: rating={rating}, reviews={reviews}."
+
     if icp_reason:
-        user += " Insight do Prospector: %s" % icp_reason
-    user += " Escreva a MENSAGEM DE ABERTURA (primeiro toque, cold reading)."
+        user += f" Insight do Prospector: {icp_reason}"
+    user += "\n\nEscreva a MENSAGEM DE ABERTURA. Retorne APENAS o texto da mensagem, sem aspas."
+    
+    content, usage = deepseek.complete(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        max_tokens=300, temperature=0.7, model=deepseek.chat_model,
+    )
+    
+    # Remove aspas caso o modelo ainda insista em colocar
+    content = content.strip().strip('"').strip("'")
+    
+    return content, usage
+
+
+def route_product(lead):
+    """Roteia o lead para o melhor produto baseado no nicho."""
+    return {
+        "nome": "Presença Blindada",
+        "nicho": lead.get("category", "negócio local"),
+        "dor": "falta de avaliações, dificuldade de ser encontrado no Google",
+        "promessa": "dominar o Google Maps e construir um funil de avaliações automático"
+    }
+
+def generate_followup(deepseek, lead, inbound_text):
+    """Agente de follow-up: segundo toque para quem respondeu a abertura.
+
+    Reforça a mesma solução roteada pelo nicho e puxa o agendamento, usando a
+    resposta do lead como contexto.
+    """
+    nome = lead.get("nome") or "negócio local"
+    nicho = lead.get("nicho") or lead.get("category") or lead.get("subcategory") or "negócio local"
+    produto = route_product(lead)
+
+    system = (
+        "Você é Solano, SDR Hunter da Kelevra Corp. O lead respondeu à sua primeira "
+        "mensagem. Escreva o FOLLOW-UP (segundo toque) curto e humano para QUALIFICAR "
+        "e AGENDAR uma reunião. Use a resposta dele como contexto.\n\n"
+        "PRODUTO EM NEGOCIAÇÃO: {nome} [{nicho}].\n"
+        "  - Dor: {dor}.\n"
+        "  - Promessa: {promessa}.\n\n"
+        "DIRETRIZES:\n"
+        "1. TOM humano, profissional e consultivo (sem \"Opa, cara\" forçado).\n"
+        "2. No máximo 2 a 4 linhas, sem bullet points.\n"
+        "3. Responda de forma natural à resposta do lead e reforce a dor do nicho.\n"
+        "4. Puxe para agendar uma reunião/call com uma pergunta simples.\n"
+        "5. NÃO invente dados. NÃO fale de preço sem a reunião."
+    ).format(
+        nome=produto["nome"], nicho=produto["nicho"],
+        dor=produto["dor"], promessa=produto["promessa"],
+    )
+
+    user = ("Lead: {} (nicho: {}).\nResposta do lead: {}\n"
+            "Escreva o FOLLOW-UP (segundo toque) reforçando o {}.".format(nome, nicho, (inbound_text or "(sem texto)")[:300], produto["nome"]))
     content, usage = deepseek.complete(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         max_tokens=300, temperature=0.7, model=deepseek.chat_model,

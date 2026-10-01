@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """CORRETOR — agente de auditoria/retroalimentação (stdlib only).
 
 Varre messages_log (outbound) e reporta taxa de entrega + falhas.
@@ -48,7 +47,7 @@ def main():
     if list_failed and fail:
         print("\n--- Falhas / pendências ---")
         for f in fail:
-            print("  %s | %s | %s | %s" % (
+            print("  {} | {} | {} | {}".format(
                 f.get("created_at"), f.get("telefone"), f.get("status"),
                 (f.get("error_details") or "")[:90]))
 

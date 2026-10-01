@@ -13,5 +13,7 @@ DeepSeek (LLM), Dify (chatflow/RAG), n8n (middleware), Evolution API (WhatsApp),
 - n8n: n8n.vps10393.panel.icontainer.run UP
 - Dify: dify.kelevra.shop UP
 
-## Produto prioritário
-Protocolo Presença Blindada (SEO local + Google Maps + funil avaliações).
+## Portfólio (roteado por nicho — fonte: kelevra-shop + pitch/voz_e_posicionamento_kelevra.md)
+- Sistema Cardápio Que Vende™ (R$ 700) → Restaurantes & Delivery
+- Sistema Anti No-Show™ (R$ 1.500) → Clínicas & Salões
+- Protocolo Presença Blindada™ (R$ 800) → Negócios locais (fallback)

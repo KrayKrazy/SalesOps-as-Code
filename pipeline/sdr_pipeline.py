@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """SDR PIPELINE — orquestrador OUTBOUND Kelevra (stdlib only).
 
 Fluxo: vw_leads_para_prospectar -> blocklist -> dedupe 72h -> [scoring ICP]
@@ -11,10 +10,14 @@ Uso:
   python sdr_pipeline.py --score             # scoring ICP via reasoner (custa mais)
 """
 import os
+import random
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import research
+
 import kelevra as K
 
 
@@ -48,6 +51,11 @@ def main():
     daily_cap = int(cfg.get("SDR_DAILY_LEAD_CAP", "50") or 50)
     per_instance_quota = cfg.get("SDR_QUOTA_PER_INSTANCE") or None
     status_sent = cfg.get("SDR_STATUS_SENT", "contatado")
+    closed_file = cfg.get("CLOSED_CLIENTS_FILE") or r"C:\mycelium\fechados.txt"
+    local_block = set(K.read_closed_phones(closed_file))
+    interval_min = int(cfg.get("SDR_SEND_INTERVAL_MIN", "120") or 120)
+    interval_max = int(cfg.get("SDR_SEND_INTERVAL_MAX", "240") or 240)
+    interval_max = max(interval_max, interval_min)
 
     if instance:
         evo.instance = instance
@@ -67,7 +75,7 @@ def main():
     print("=" * 70)
     print("KELEVRA SDR PIPELINE — %s" % ("DRY-RUN (não envia)" if dry_run else "ENVIO REAL"))
     print("Pool de instâncias: %s" % (pool.summary() or evo.instance))
-    print("Conversa: %s | scoring: %s" % (ds.chat_model, ds.reason_model))
+    print(f"Conversa: {ds.chat_model} | scoring: {ds.reason_model}")
     print("=" * 70)
 
     sent_today = K.count_sent_today(supa)
@@ -75,18 +83,24 @@ def main():
     if not dry_run and sent_today >= daily_cap:
         sys.exit("Cap diário atingido (anti-ban). Abortando.")
 
+    # target = número de ENVIOS desejados (ex.: 14 por disparo). Fazemos overfetch
+    # para compensar leads bloqueados/duplicados/sem WhatsApp e garantir o total.
     if limit and limit > 0:
-        n = limit
-        if not dry_run:
-            n = min(limit, daily_cap - sent_today)
+        target = limit
     else:
-        n = daily_cap - sent_today
-    leads = K.get_pending_leads(supa, limit=n)
+        target = daily_cap if dry_run else (daily_cap - sent_today)
+    if not dry_run:
+        target = min(target, daily_cap - sent_today)
+        if target <= 0:
+            sys.exit("Cap diário atingido (anti-ban). Abortando.")
+    fetch_n = min(max(target * 3, target), 300)
+    leads = K.get_pending_leads(supa, limit=fetch_n)
     if not leads:
         sys.exit("Nenhum lead pendente em vw_leads_para_prospectar.")
 
-    print("Leads pendentes: %d\n" % len(leads))
+    print("Leads pendentes (lote): %d | alvo: %d envio(s)\n" % (len(leads), target))
     ok = skipped = failed = 0
+    last_send_ts = 0.0
 
     # Pré-validação de WhatsApp (bloqueia inválidos antes de enviar)
     validation = {}
@@ -94,7 +108,7 @@ def main():
         candidate_phones = []
         for lead in leads:
             ph = K.normalize_phone(lead.get("telefone") or "")
-            if not ph or K.is_blocked(supa, ph) or K.was_contacted_recently(supa, ph, 72):
+            if not ph or ph in local_block or K.is_blocked(supa, ph) or K.was_contacted_recently(supa, ph, 72):
                 continue
             candidate_phones.append(ph)
         if candidate_phones:
@@ -112,6 +126,8 @@ def main():
             print()
 
     for idx, lead in enumerate(leads, 1):
+        if ok >= target:
+            break
         trace = K.trace_id()
         phone = K.normalize_phone(lead.get("telefone") or "")
         nome = lead.get("nome") or "(sem nome)"
@@ -124,6 +140,10 @@ def main():
             continue
         if K.is_blocked(supa, phone):
             print("  ⏭ bloqueado (blocklist)")
+            skipped += 1
+            continue
+        if phone in local_block:
+            print("  ⏭ cliente fechado (txt local)")
             skipped += 1
             continue
         if K.was_contacted_recently(supa, phone, 72):
@@ -146,15 +166,29 @@ def main():
                                    {"icp_score": icp}, u.get("prompt_tokens", 0),
                                    u.get("completion_tokens", 0), trace, lat)
             except Exception as e:
-                print("  ⚠ scoring falhou: %s" % e)
+                print(f"  ⚠ scoring falhou: {e}")
                 K.log_error(supa, "prospector", lid, "score_error", e, {"trace": trace})
+
+        seo_dossier = None
+        try:
+            print("  🔍 Pesquisando empresa no Google...")
+            seo_dossier = research.search_business(lead)
+            if seo_dossier:
+                print(f"  ✅ Dossier: {seo_dossier}")
+                # Save to DB (graciously fails if column doesn't exist but migration 0001 created it)
+                try:
+                    supa.patch("cold_leads", f"id=eq.{lid}", {"seo_dossier": seo_dossier})
+                except Exception as db_err:
+                    print(f"  ⚠ falha ao salvar dossier no banco: {db_err}")
+        except Exception as e:
+            print(f"  ⚠ pesquisa falhou: {e}")
 
         try:
             t0 = time.time()
-            text, u = K.generate_opening(ds, lead, icp_reason)
+            text, u = K.generate_opening(ds, lead, icp_reason, seo_dossier)
             lat = int((time.time() - t0) * 1000)
         except Exception as e:
-            print("  ✗ geração falhou: %s" % e)
+            print(f"  ✗ geração falhou: {e}")
             K.log_error(supa, "qualificador", lid, "generate_error", e, {"trace": trace})
             failed += 1
             continue
@@ -163,12 +197,18 @@ def main():
             failed += 1
             continue
 
-        print("  ── %s" % text.replace("\n", " ")[:140])
+        print("  ── {}".format(text.replace("\n", " ")[:140]))
 
         if dry_run:
             print("  [DRY-RUN] não enviado")
             ok += 1
             continue
+
+        if last_send_ts:
+            wait = random.uniform(interval_min, interval_max) - (time.time() - last_send_ts)
+            if wait > 0:
+                print(f"  ⏳ aguardando {wait:.0f}s (anti-ban, intervalo aleatório)")
+                time.sleep(wait)
 
         inst = pool.next()
         if inst is None:
@@ -181,6 +221,7 @@ def main():
             st, resp = evo.send_text(phone, text)
         except Exception as e:
             st, resp = -1, str(e)
+        last_send_ts = time.time()
 
         if st in (200, 201):
             pool.record_send(inst)
@@ -189,19 +230,20 @@ def main():
             if lid is not None:
                 try:
                     supa.update("leads", {"status": status_sent}, "id", lid)
-                except Exception:
-                    pass
+                except Exception as db_err:
+                    print(f"  ❌ FALHA CRÍTICA: Não foi possível atualizar o status do lead {lid} no banco. Mensagem enviada via WhatsApp, mas status não salvo. Erro: {db_err}")
+                    sys.exit(1) # Fail-fast: previne que o script rode novamente no próximo cron e gere SPAM no WhatsApp
             K.record_agent_run(supa, "qualificador", lid, ds.chat_model, "sent",
                                {"telefone": phone, "instance": inst["name"]},
                                u.get("prompt_tokens", 0),
                                u.get("completion_tokens", 0), trace, lat)
-            print("  ✔ enviado via %s" % inst["name"])
+            print("  ✔ enviado via {}".format(inst["name"]))
             ok += 1
         else:
             K.log_message(supa, lead, text, "failed", error=str(resp), trace=trace)
             K.log_error(supa, "qualificador", lid, "send_error", resp,
                         {"trace": trace, "instance": inst["name"]})
-            print("  ✗ falha (%s) via %s: %s" % (st, inst["name"], str(resp)[:200]))
+            print("  ✗ falha ({}) via {}: {}".format(st, inst["name"], str(resp)[:200]))
             failed += 1
 
     print("\n" + "=" * 70)

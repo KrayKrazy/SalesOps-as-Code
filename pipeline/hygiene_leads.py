@@ -1,6 +1,11 @@
-# -*- coding: utf-8 -*-
 """Higienização de leads — valida WhatsApp via Evolution e bloqueia inválidos."""
-import sys, os, json, re, time, urllib.parse
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+
 sys.path.insert(0, r"C:\mycelium\SalesOps-as-Code\pipeline")
 import kelevra as K
 
@@ -24,7 +29,7 @@ def norm(p):
 
 
 def fetch_unique(table, key="telefone"):
-    rows = s.get(table, "select=%s&limit=10000" % key) or []
+    rows = s.get(table, f"select={key}&limit=10000") or []
     out = {}
     for r in rows:
         p = norm(r.get(key))
@@ -95,7 +100,7 @@ def apply_from_report():
     ld_upd = 0
     for i in range(0, len(to_block), 50):
         chunk = to_block[i:i + 50]
-        q = "telefone=in.(%s)" % ",".join('"%s"' % urllib.parse.quote(p) for p in chunk)
+        q = "telefone=in.({})".format(",".join(f'"{urllib.parse.quote(p)}"' for p in chunk))
         st, _ = s.client.request("PATCH", s._path("leads", q),
                                  body={"status": "desqualificado"},
                                  headers={"Prefer": "return=minimal"})
@@ -199,7 +204,7 @@ def main():
     ld_upd = 0
     for i in range(0, len(to_block), 50):
         chunk = to_block[i:i + 50]
-        q = "telefone=in.(%s)" % ",".join('"%s"' % urllib.parse.quote(p) for p in chunk)
+        q = "telefone=in.({})".format(",".join(f'"{urllib.parse.quote(p)}"' for p in chunk))
         st, _ = s.client.request("PATCH", s._path("leads", q),
                                  body={"status": "desqualificado"},
                                  headers={"Prefer": "return=minimal"})

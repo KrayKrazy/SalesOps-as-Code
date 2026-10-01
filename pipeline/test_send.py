@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Teste E2E de envio WhatsApp para um número específico.
 
 Uso:
@@ -7,7 +6,11 @@ Uso:
 
 Sem argumento, usa a variável de ambiente TEST_SEND_NUMBER (ou aborta).
 """
-import sys, os, json, urllib.parse
+import json
+import os
+import sys
+import urllib.parse
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kelevra as K
 
