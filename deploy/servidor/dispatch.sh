@@ -37,7 +37,7 @@ echo "[$STAMP] Janela aleatória: dormindo ${SLEEP_SEC}s antes do disparo (limit
 sleep "$SLEEP_SEC"
 
 cd "$PIPELINE_DIR"
-"$PY_BIN" sdr_pipeline.py --send --limit "$LIMIT" >> "$LOG" 2>&1
+"$PY_BIN" sdr_pipeline.py --send --limit "$LIMIT" --score >> "$LOG" 2>&1
 
 {
   echo ""

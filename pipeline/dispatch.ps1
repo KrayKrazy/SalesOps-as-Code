@@ -27,9 +27,9 @@ if ($WindowMinutes -gt 0) {
 }
 
 if ($DryRun) {
-    $pyArgs = @($pipe, '--limit', $Limit)
+    $pyArgs = @($pipe, '--limit', $Limit, '--score')
 } else {
-    $pyArgs = @($pipe, '--send', '--limit', $Limit)
+    $pyArgs = @($pipe, '--send', '--limit', $Limit, '--score')
 }
 
 Push-Location (Join-Path $root 'pipeline')

@@ -22,7 +22,7 @@ def jid_phone(jid):
     return jid.split("@")[0]
 
 
-def message_text(msg):
+def message_text(msg, evo=None, openai_key=None):
     mt = msg.get("messageType") or ""
     m = msg.get("message") or {}
     if mt == "conversation":
@@ -30,8 +30,22 @@ def message_text(msg):
     if mt == "extendedTextMessage":
         return (m.get("extendedTextMessage") or {}).get("text") or ""
     if mt == "audioMessage":
+        if evo and openai_key:
+            print("  [+] Baixando audio e transcrevendo com Whisper...")
+            b64, mime = evo.get_base64_from_media_message(msg)
+            if b64:
+                text = K.transcribe_audio(openai_key, b64, mime or "audio/ogg")
+                if text:
+                    return f"[ÁUDIO TRANSCRITO]: {text}"
         return "[audio]"
     if mt == "imageMessage":
+        if evo and openai_key:
+            print("  [+] Baixando imagem e analisando com Vision...")
+            b64, mime = evo.get_base64_from_media_message(msg)
+            if b64:
+                desc = K.describe_image(openai_key, b64, mime or "image/jpeg")
+                if desc:
+                    return f"[IMAGEM DESCRITA]: {desc}"
         return "[imagem]"
     if mt == "videoMessage":
         return "[video]"
@@ -108,7 +122,7 @@ def main():
             if trace in seen:
                 continue
 
-            content = message_text(msg)
+            content = message_text(msg, evo, cfg.get("OPENAI_API_KEY"))
             ts = msg.get("messageTimestamp") or 0
             created = K.now_iso()
             if ts:

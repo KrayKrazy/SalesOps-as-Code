@@ -93,7 +93,7 @@ def main():
         target = min(target, daily_cap - sent_today)
         if target <= 0:
             sys.exit("Cap diário atingido (anti-ban). Abortando.")
-    fetch_n = min(max(target * 3, target), 300)
+    fetch_n = 500 # Busca MUITOS leads para garantir que os bons passem (ignora blocks)
     leads = K.get_pending_leads(supa, limit=fetch_n)
     if not leads:
         sys.exit("Nenhum lead pendente em vw_leads_para_prospectar.")

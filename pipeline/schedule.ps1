@@ -42,3 +42,10 @@ Register-ScheduledTask -TaskName 'Kelevra SDR - Inbound Sync' -Action $iAction -
 Write-Host 'Registrado: Kelevra SDR - Inbound Sync (a cada 30 min)'
 
 Write-Host "Concluído. Para conferir: Get-ScheduledTask | Where-Object TaskName -like 'Kelevra SDR*'"
+
+# Follow-up Pipeline (Responde as mensagens inbound)
+$followup = 'C:\mycelium\SalesOps-as-Code\pipeline\followup_pipeline.py'
+$fAction    = New-ScheduledTaskAction -Execute $py -Argument ('"' + $followup + '" --send') -WorkingDirectory 'C:\mycelium\SalesOps-as-Code\pipeline'
+$fTrigger   = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 30)
+Register-ScheduledTask -TaskName 'Kelevra SDR - Followup Responder' -Action $fAction -Trigger $fTrigger -Settings $iSettings -Principal $iPrincipal -Force | Out-Null
+Write-Host 'Registrado: Kelevra SDR - Followup Responder (a cada 30 min)'
