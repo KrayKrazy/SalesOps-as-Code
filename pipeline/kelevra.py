@@ -561,7 +561,9 @@ def get_respondents(supa, done_status="finalizado"):
 
     rows = []
     for ph, m in latest.items():
-        lead = lead_by_phone.get(ph) or {}
+        lead = lead_by_phone.get(ph)
+        if not lead or not lead.get("id"):
+            continue
         status = (lead.get("status") or "").lower()
         if status in (done_status.lower(), "desqualificado"):
             continue
@@ -681,191 +683,16 @@ def log_error(supa, agent_id, lead_id, error_type, message, context=None,
 def score_lead(deepseek, lead):
     """Prospector: ICP score (0-100) + justificativa via DeepSeek reasoner."""
     system = (
-        "Você é o Prospector da Kelevra Corp. Analise o lead de negócio local e "
-        "retorne SOMENTE um JSON válido, sem texto extra, no formato "
-        '{"icp_score": <0-100>, "icp_reason": "<1-2 frases>"}. '
-        "Priorize: presença digital fraca (rating<4.5 OU review_count<50 OU sem "
-        "website), negócio local de pequeno/médio porte, nicho com dor em SEO/Google "
-        "Maps. Penalize grandes empresas."
-    )
-    user = json.dumps({
-        "nome": display_name(lead.get("nome")),
-        "categoria": lead.get("category") or lead.get("subcategory"),
-        "bairro": lead.get("bairro"),
-        "cidade": lead.get("cidade"),
-        "gmn_rating": lead.get("gmn_rating"),
-        "gmn_reviews": lead.get("gmn_reviews"),
-        "gmn_has_website": lead.get("gmn_has_website"),
-        "audit_score": lead.get("audit_score"),
-    }, ensure_ascii=False)
-    content, usage = deepseek.complete(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=1024, temperature=0.2, model=deepseek.reason_model,
-    )
-    parsed = _extract_json(content)
-    score = parsed.get("icp_score", 0)
-    try:
-        score = int(score)
-    except Exception as e:
-        raise ValueError(f"Falha ao interpretar ICP Score da LLM: {score}. Erro: {e}")
-    return score, parsed.get("icp_reason", ""), usage
-
-
-def generate_opening(deepseek, lead, icp_reason=None, seo_dossier=None):
-    """Qualificador: abertura de WhatsApp (1º toque) alinhada à voz Kelevra + PAS."""
-    nome = display_name(lead.get("nome")) or ""
-    nicho = lead.get("category") or lead.get("subcategory") or "negócio local"
-    rating = lead.get("gmn_rating")
-    reviews = lead.get("gmn_reviews")
-    has_website = lead.get("gmn_has_website")
-    bairro = lead.get("bairro")
-    cidade = lead.get("cidade")
-    produto = route_product(lead)
-
-    # Cold reading: no máximo 1 dado real, casual (nunca inventar).
-    dados = []
-    if reviews:
-        dados.append(f"{reviews} avaliações no Google")
-    if rating:
-        dados.append(f"nota {rating}")
-    if has_website is False:
-        dados.append("sem site próprio")
-    cold = dados[0] if dados else ""
-
-    system = (
-        "Você é o Solano, consultor da Kelevra Corp, especialista em tecnologia para negócios locais.\n"
-        "Escreva uma MENSAGEM DE ABERTURA fria no WhatsApp para o DONO de um negócio local.\n\n"
-        "REGRAS DE COPY (obrigatórias):\n"
-        "1. VOZ: humano, em primeira pessoa, consultivo. Nada de robô, nada de 'nossa inteligência mapeou', nada de jargão corporativo.\n"
-        "2. ABERTURA: saudação natural + 'aqui é o Solano, da Kelevra'.\n"
-        "3. ESTRUTURA (PAS, 2 a 4 linhas curtas): aponte a dor específica do nicho -> agite de leve -> faça UMA pergunta simples de sim/não.\n"
-        "4. FALE A LÍNGUA DO DONO: faturamento, taxa, cliente faltando, agenda vazia, cliente achando o concorrente no Google.\n"
-        "5. COLD READING: cite no máximo 1 dado real do lead, de forma casual e respeitosa.\n"
-        "6. CTA: uma pergunta direta de sim/não para agendar 5 minutinhos, sem pressionar.\n"
-        "7. PROIBIDO: preço, 'marketing digital', 'site', 'tráfego pago', bullets, mais de 1 emoji, aspas, 'você sabia que...'.\n"
-        "8. NÃO invente dados. Se não souber, omita.\n"
-        "9. Retorne APENAS o texto da mensagem (máx 4 linhas)."
-    )
-    user = (
-        f"Produto: {produto['nome']}\n"
-        f"Dor que resolve: {produto['dor']}\n"
-        f"Lead: {nome or 'o(a) dono(a)'} | nicho: {nicho}"
-    )
-    if bairro or cidade:
-        user += f" | local: {' '.join(str(x) for x in (bairro, cidade) if x)}"
-    if cold:
-        user += f"\nDado real do lead: {cold}"
-    if seo_dossier:
-        user += f"\nPesquisa (use no máximo 1 fato, natural): {seo_dossier[:400]}"
-    if icp_reason:
-        user += f"\nInsight do Prospector (não citar literal): {icp_reason}"
-    user += "\n\nEscreva a mensagem de abertura (APENAS o texto)."
-    
-    content, usage = deepseek.complete(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=300, temperature=0.7, model=deepseek.chat_model,
-    )
-    
-    # Remove aspas caso o modelo ainda insista em colocar
-    content = content.strip().strip('"').strip("'")
-    
-    return content, usage
-
-
-# Roteamento de produto por nicho — fonte canônica: pitch/voz_e_posicionamento_kelevra.md (seção 4).
-PRODUTOS = {
-    "cardapio": {
-        "nome": "Sistema Cardápio Que Vende™",
-        "dor": "pagar até 30% de taxa do iFood e ainda perder pedido no WhatsApp",
-        "promessa": "transformar o WhatsApp em máquina de vendas sem taxa, com IA atendendo 24h",
-    },
-    "antinoshow": {
-        "nome": "Sistema Anti No-Show™",
-        "dor": "cliente marcar e não aparecer, deixando a agenda vazia",
-        "promessa": "blindar a agenda com lembrete + confirmação via Pix",
-    },
-    "presenca": {
-        "nome": "Protocolo Presença Blindada™",
-        "dor": "não aparecer no Google quando o cliente procura o serviço na região",
-        "promessa": "colocar o negócio no topo do Google Maps com funil de avaliações 5 estrelas",
-    },
-}
-
-NICHO_KEYWORDS = {
-    "cardapio": [
-        "restaurante", "pizzaria", "hamburgueria", "hamburguer", "lanchonete", "delivery",
-        "padaria", "confeitaria", "cafeteria", "acai", "sorvete", "sorveteria", "sushi",
-        "esfiha", "marmita", "churrasco", "comida", "petiscaria", "boteco", "doceria",
-        "burger", "pizza", "cozinha", "pastel", "tapioca", "lanche", "gourmet", "cantina",
-        "food", "self service", "restaurantes", "pizzas",
-    ],
-    "antinoshow": [
-        "clinica", "odontol", "estetica", "salao", "barbearia", "fisioterapia", "psicolog",
-        "nutri", "petshop", "spa", "depilacao", "manicure", "podologia", "academia",
-        "pilates", "massagem", "tatuagem", "cabeleireiro", "veterinaria", "medic",
-        "saude", "dental", "implante", "ortodontia", "barber", "beauty", "estudio",
-        "personal", "crossfit", "studio", "cilios", "unhas", "sobrancelha",
-    ],
-}
-
-
-def _norm(s):
-    """Normaliza texto para comparação de nicho: minúsculas e sem acentos."""
-    import unicodedata
-    s = (s or "").lower()
-    s = s.replace("-", " ")
-    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-
-
-def _match(nicho, keyword):
-    """Busca por palavra inteira (evita falso positivo, ex.: 'spa' em 'espaço')."""
-    import re
-    return re.search(r"\b" + re.escape(keyword) + r"\b", nicho) is not None
-
-
-def route_product(lead):
-    """Roteia o lead para o produto certo pelo nicho (voz_e_posicionamento_kelevra.md)."""
-    nicho = _norm(" ".join(str(lead.get(k) or "") for k in ("category", "subcategory", "nicho_kelevra")))
-    for key in ("cardapio", "antinoshow"):
-        if any(_match(nicho, k) for k in NICHO_KEYWORDS[key]):
-            return dict(PRODUTOS[key], key=key, nicho=(lead.get("category") or "negócio local"))
-    return dict(PRODUTOS["presenca"], key="presenca", nicho=(lead.get("category") or "negócio local"))
-
-def generate_followup(deepseek, lead, inbound_text):
-    """Agente de follow-up: segundo toque para quem respondeu a abertura.
-
-    Reforça a mesma solução roteada pelo nicho e puxa o agendamento, usando a
-    resposta do lead como contexto.
-    """
-    nome = display_name(lead.get("nome")) or "negócio local"
-    nicho = lead.get("nicho") or lead.get("category") or lead.get("subcategory") or "negócio local"
-    produto = route_product(lead)
-
-    kelevra_brain = ""
-    try:
-        import os
-        pitch_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pitch")
-        with open(os.path.join(pitch_dir, "visao_geral_saas.md"), "r", encoding="utf-8") as f:
-            kelevra_brain += f.read()
-    except:
-        pass
-
-    system = (
-        "Você é o Solano, consultor da Kelevra Corp. O lead respondeu à sua "
-        "primeira mensagem. Seu objetivo é realizar o FOLLOW-UP aplicando o framework de qualificação BANT "
-        "(Budget, Authority, Need, Timeline) de forma humanizada, empática e natural (nada robótico).\n\n"
-        f"--- CONTEXTO KELEVRA ---\n{kelevra_brain}\n\n"
-        "PRODUTO/SOLUÇÃO EM NEGOCIAÇÃO: {nome} [{nicho}].\n"
-        "  - Dor do nicho: {dor}.\n"
-        "  - Mecanismo que resolve: {promessa}.\n\n"
-        "DIRETRIZES DE OURO:\n"
-        "1. TOM: Engenheiro consultivo e altamente qualificado. Zero gírias, mas soe como um humano, não um robô.\n"
-        "2. BANT: Faça 1 ou 2 perguntas inteligentes que descubram a dor (Need) ou urgência (Timeline) do lead baseadas na resposta dele.\n"
-        "3. Se a resposta dele já demonstrar interesse ou se for apropriado, envie o link da agenda: forms.kelevra.shop\n"
-        "4. CASO DE ÁUDIO/IMAGEM: Se a resposta do lead for literalmente '[audio]' ou '[imagem]', responda educadamente que você está em uma reunião ou ambiente barulhento e peça para ele escrever por texto.\n"
-        "5. PROIBIDO: NUNCA inicie com 'Aqui está o texto', 'Segue o follow-up'. Forneça APENAS a mensagem final que será enviada no WhatsApp.\n"
-        "6. PROIBIDO: Não use aspas envolvendo o texto.\n"
-        "7. PROIBIDO: Nunca escreva notas ou parênteses explicando sua estratégia (ex: '(Foco na dor...)'). Escreva APENAS a resposta para o lead."
+        "Você é o Solano, da Kelevra Corp. O lead respondeu sua abertura no WhatsApp.\n"
+        "Seu objetivo é dar uma ÚNICA resposta direta e curta, puxando para uma call de 5 min.\n\n"
+        "PRODUTO EM FOCO: {nome} [{nicho}] - Dor: {dor}\n\n"
+        "REGRAS DE OURO:\n"
+        "1. TOM: Direto, pragmático, sem enrolação. Nada de 'Fico feliz que respondeu' ou textão.\n"
+        "2. TAMANHO: Máximo 3 linhas. Seja cirúrgico.\n"
+        "3. AÇÃO: Se houver abertura, diga: 'Vamos bater um papo rápido pra te mostrar na tela. Que horário fica melhor? Se preferir, escolhe aqui: forms.kelevra.shop'. Nunca use formatação markdown no link.\n"
+        "4. SE FOR ÁUDIO: Diga apenas 'Estou em reunião e não consigo ouvir agora. Consegue me mandar por texto ou marcamos 5 min na agenda? forms.kelevra.shop'.\n"
+        "5. PROIBIDO: Fazer mais de uma pergunta, usar jargões corporativos, ser excessivamente professoral ou enviar múltiplos links.\n"
+        "6. PROIBIDO: NUNCA inicie com 'Aqui está o texto'. Forneça APENAS a mensagem final."
     ).format(
         nome=produto["nome"], nicho=produto["nicho"],
         dor=produto["dor"], promessa=produto["promessa"],
