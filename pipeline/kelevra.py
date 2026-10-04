@@ -293,12 +293,12 @@ def transcribe_audio(openai_key, base64_audio, mimetype="audio/ogg"):
     except: pass
     return ""
 
-def describe_image(openai_key, base64_image, mimetype="image/jpeg"):
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+def describe_image(deepseek_key, base64_image, mimetype="image/jpeg"):
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {"Authorization": f"Bearer {deepseek_key}", "Content-Type": "application/json"}
     data_uri = f"data:{mimetype};base64,{base64_image}"
     payload = {
-        "model": "gpt-4o-mini",
+        "model": "deepseek-chat",
         "messages": [
             {"role": "user", "content": [
                 {"type": "text", "text": "Descreva o que tem nesta imagem. Seja curto e foque no contexto de negócios."},

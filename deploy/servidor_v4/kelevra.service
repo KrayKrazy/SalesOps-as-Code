@@ -1,0 +1,14 @@
+[Unit]
+Description=Kelevra V4 SDR Core (FastAPI)
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/kelevra/pipeline
+EnvironmentFile=/opt/kelevra/pipeline/.env
+ExecStart=/opt/kelevra/venv/bin/uvicorn sdr_v4_fastapi:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
